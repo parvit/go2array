@@ -55,7 +55,8 @@ func main() {
 
 	fList.WriteString(fmt.Sprintf("package %s\n\n", options.packageName))
 	fList.WriteString(fmt.Sprintf("var %s map[string][]byte \n\n", listName))
-	fList.WriteString("func init(){ \n\n")
+	fList.WriteString("func init(){ \n")
+	fList.WriteString(fmt.Sprintf("\t%s = make(map[string][]byte)	\n", listName))
 
 	// data file create
 	fData, err := os.OpenFile(dataFilename, os.O_CREATE, 0777)
