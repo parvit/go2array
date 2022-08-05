@@ -4,17 +4,25 @@ A simple utility to encode a file (or any other data) into a Go byte slice.
 
 Having [set up your Go environment](http://golang.org/doc/install), simply run
 
-    go get github.com/cratonica/2goarray
+    go get github.com/parvit/go2array
 
-Then use by piping a file into the utility and capturing the output. You must provide a name for the generated slice symbol and package name. For example:
+You must provide a name for the generated variables and the package name, the input files are specified as 
+parameters at the end. For example:
 
-    $GOPATH/bin/2goarray MyArray mypackage < myimage.png > myimage.go
+    $GOPATH/bin/go2array [-prefix <variablePrefix>] [-package <packageName>] file1 [file2 ...]
 
-This will output something like:
+Default variabilePrefix and is "binaries"
 
-    package mypackage
+The output will be two files:
+    1. <variablePrefix>_filelist.go : That will contain a map with all the variables assigned to their original name
+    2. <variablePrefix>_data.go : Which will contain all the variables data
 
-    var MyArray []byte = []byte {
+In <variablePrefix>_data.go you will find:
+```
+    package <packageName>
+
+    // for each file, a variable is declared incrementing the index
+    var <variablePrefix>_N []byte = []byte {
       0x49, 0x20, 0x63, 0x61, 0x6e, 0x27, 0x74, 0x20, 0x62, 0x65, 0x6c, 0x69,
       0x65, 0x76, 0x65, 0x20, 0x79, 0x6f, 0x75, 0x20, 0x61, 0x63, 0x74, 0x75,
       0x61, 0x6c, 0x6c, 0x79, 0x20, 0x64, 0x65, 0x63, 0x6f, 0x64, 0x65, 0x64,
@@ -22,7 +30,10 @@ This will output something like:
       0x20, 0x66, 0x6f, 0x72, 0x20, 0x62, 0x65, 0x69, 0x6e, 0x67, 0x20, 0x74,
       0x68, 0x6f, 0x72, 0x6f, 0x75, 0x67, 0x68, 0x2e, 0x0a,
     }
+    
+```
 
 ## Contributors
 - [Clint Caywood](https://github.com/cratonica)
 - [Paul Vollmer](https://github.com/paulvollmer)
+- [Vittorio Parrella](https://github.com/parvit)
