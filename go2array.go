@@ -51,7 +51,7 @@ func main() {
 	listName := strings.Title(fmt.Sprintf("%sList", Options.variablePrefix))
 
 	// list file create
-	fList, err := os.OpenFile(listFilename, os.O_CREATE, 0777)
+	fList, err := os.OpenFile(listFilename, os.O_CREATE|os.O_TRUNC, 0777)
 	if err != nil {
 		log.Fatalf("Could not create file %s", listFilename)
 	}
@@ -63,7 +63,7 @@ func main() {
 	fList.WriteString(fmt.Sprintf("\t%s = make(map[string][]byte)	\n", listName))
 
 	// data file create
-	fData, err := os.OpenFile(dataFilename, os.O_CREATE, 0777)
+	fData, err := os.OpenFile(dataFilename, os.O_CREATE|os.O_TRUNC, 0777)
 	if err != nil {
 		log.Fatalf("Could not create file %s", dataFilename)
 	}
@@ -93,7 +93,7 @@ func main() {
 				}
 				index++
 
-				writeFileToPackage(index, path, listFilename, dataFilename, fList, fData)
+				writeFileToPackage(index, path, listName, listFilename, fList, fData)
 				return nil
 			})
 		}
