@@ -1,6 +1,6 @@
 go2array
 ========
-A simple utility to encode a file (or any other data) into a Go byte slice.
+Utility to encode a file (or a series of files) into a Go package.
 
 Having [set up your Go environment](http://golang.org/doc/install), simply run
 
