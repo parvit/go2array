@@ -22,6 +22,7 @@ const (
 type options struct {
 	variable        string
 	variablePrefix  string
+	platform        string
 	packageName     string
 	exportVariables bool
 	flatHierarchy   bool
@@ -33,6 +34,7 @@ var Options = &options{}
 func main() {
 	flag.StringVar(&Options.variable, "var", "", "String for the fixed variable name")
 	flag.StringVar(&Options.variablePrefix, "prefix", "", "String to prefix the variable names")
+	flag.StringVar(&Options.platform, "platform", "", "Platform file name suffix to append")
 	flag.StringVar(&Options.packageName, "package", "binaries", "String to use as package name")
 	flag.BoolVar(&Options.exportVariables, "export", false, "Exports also variables")
 	flag.BoolVar(&Options.flatHierarchy, "flat", false, "Flatten hierarchy")
@@ -53,15 +55,17 @@ func main() {
 		log.Fatalf("Package name must be non-empty\n")
 	}
 
-	listFilename := fmt.Sprintf("%s_filelist.go", Options.packageName)
+	listFilename := fmt.Sprintf("%s_%s.go", Options.packageName, getSuffix("filelist", Options.platform))
 	listName := ""
 	dataFilename := ""
 	if len(Options.variable) > 0 {
 		listName = strings.Title(fmt.Sprintf("%sList", Options.variable))
-		dataFilename = fmt.Sprintf("%s_%s_data.go", Options.packageName, Options.variable)
+
+		dataFilename = fmt.Sprintf("%s_%s_%s.go", Options.packageName, Options.variable, getSuffix("data", Options.platform))
 	} else {
 		listName = strings.Title(fmt.Sprintf("%sList", Options.variablePrefix))
-		dataFilename = fmt.Sprintf("%s_data.go", Options.packageName)
+
+		dataFilename = fmt.Sprintf("%s_%s.go", Options.packageName, getSuffix("data", Options.platform))
 	}
 
 	// list file create
@@ -178,4 +182,11 @@ func writeFileToPackage(inFileIndex int, inFileName, listName, listFilename stri
 
 	// close the variable
 	fData.WriteString("\n}\n\n")
+}
+
+func getSuffix(base, suffix string) string {
+	if len(suffix) > 0 {
+		return base + "_" + suffix
+	}
+	return base
 }
