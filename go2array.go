@@ -20,47 +20,65 @@ const (
 )
 
 type options struct {
+	variable        string
 	variablePrefix  string
 	packageName     string
 	exportVariables bool
 	flatHierarchy   bool
+	ignoreFilelist  bool
 }
 
 var Options = &options{}
 
 func main() {
-	flag.StringVar(&Options.variablePrefix, "prefix", "binaries", "String to prefix the variable names")
+	flag.StringVar(&Options.variable, "var", "", "String for the fixed variable name")
+	flag.StringVar(&Options.variablePrefix, "prefix", "", "String to prefix the variable names")
 	flag.StringVar(&Options.packageName, "package", "binaries", "String to use as package name")
 	flag.BoolVar(&Options.exportVariables, "export", false, "Exports also variables")
 	flag.BoolVar(&Options.flatHierarchy, "flat", false, "Flatten hierarchy")
+	flag.BoolVar(&Options.ignoreFilelist, "nolist", false, "Don't produce list file")
 
 	flag.Parse()
 	if !flag.Parsed() {
 		log.Fatalf("Could not parse command lines\n")
 	}
 
-	if len(Options.variablePrefix) == 0 {
-		log.Fatalf("Variables's prefix value must be non-empty\n")
+	if len(Options.variablePrefix) == 0 && len(Options.variable) == 0 {
+		log.Fatalf("Variables prefix value must be non-empty\n")
+	}
+	if len(Options.variablePrefix) > 0 && len(Options.variable) > 0 {
+		log.Fatalf("The variables prefix or the fixed name must be non-empty, not both\n")
 	}
 	if len(Options.packageName) == 0 {
 		log.Fatalf("Package name must be non-empty\n")
 	}
 
-	listFilename := fmt.Sprintf("%s_filelist.go", Options.variablePrefix)
-	dataFilename := fmt.Sprintf("%s_data.go", Options.variablePrefix)
-	listName := strings.Title(fmt.Sprintf("%sList", Options.variablePrefix))
+	listFilename := fmt.Sprintf("%s_filelist.go", Options.packageName)
+	listName := ""
+	dataFilename := ""
+	if len(Options.variable) > 0 {
+		listName = strings.Title(fmt.Sprintf("%sList", Options.variable))
+		dataFilename = fmt.Sprintf("%s_%s_data.go", Options.packageName, Options.variable)
+	} else {
+		listName = strings.Title(fmt.Sprintf("%sList", Options.variablePrefix))
+		dataFilename = fmt.Sprintf("%s_data.go", Options.packageName)
+	}
 
 	// list file create
-	fList, err := os.OpenFile(listFilename, os.O_CREATE|os.O_TRUNC, 0777)
-	if err != nil {
-		log.Fatalf("Could not create file %s", listFilename)
-	}
-	defer fList.Close()
+	var fList *os.File
+	var err error
+	if !Options.ignoreFilelist {
+		fList, err = os.OpenFile(listFilename, os.O_CREATE|os.O_TRUNC, 0777)
+		if err != nil {
+			log.Fatalf("Could not create file %s", listFilename)
+		}
+		defer fList.Close()
 
-	fList.WriteString(fmt.Sprintf("package %s\n\n", Options.packageName))
-	fList.WriteString(fmt.Sprintf("var %s map[string][]byte \n\n", listName))
-	fList.WriteString("func init(){ \n")
-	fList.WriteString(fmt.Sprintf("\t%s = make(map[string][]byte)	\n", listName))
+		fList.WriteString(fmt.Sprintf("package %s\n\n", Options.packageName))
+		fList.WriteString(fmt.Sprintf("var %s map[string][]byte \n\n", listName))
+		fList.WriteString("func init(){ \n")
+		fList.WriteString(fmt.Sprintf("\t%s = make(map[string][]byte)	\n", listName))
+	}
 
 	// data file create
 	fData, err := os.OpenFile(dataFilename, os.O_CREATE|os.O_TRUNC, 0777)
@@ -71,7 +89,7 @@ func main() {
 
 	fData.WriteString(fmt.Sprintf("package %s\n\n", Options.packageName))
 
-	log.Println("list file: ", listFilename)
+	log.Println("list file: ", listFilename, "ignored: ", Options.ignoreFilelist)
 	log.Println("data file: ", dataFilename)
 	index := 0
 	for _, inFile := range flag.CommandLine.Args() {
@@ -79,29 +97,38 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		defer f.Close()
-		if stat, err := f.Stat(); err == nil {
-			if !stat.IsDir() {
-				writeFileToPackage(index, inFile, listName, listFilename, fList, fData)
-				continue
-			}
-
-			log.Printf("Will harvest the '%s' directory\n", inFile)
-			filepath.WalkDir(inFile, func(path string, dEntry fs.DirEntry, err error) error {
-				if err != nil || dEntry.IsDir() {
-					return nil
-				}
-				index++
-
-				writeFileToPackage(index, path, listName, listFilename, fList, fData)
-				return nil
-			})
+		stat, err := f.Stat()
+		f.Close()
+		if err != nil {
+			continue
 		}
-		index++
+
+		if !stat.IsDir() {
+			writeFileToPackage(index, inFile, listName, listFilename, fList, fData)
+			index++
+			continue
+		}
+		if stat.IsDir() && len(Options.variable) > 0 {
+			log.Fatalf("Cannot harvest directory with fixed variable name\n")
+			return
+		}
+
+		log.Printf("Will harvest the '%s' directory\n", inFile)
+		filepath.WalkDir(inFile, func(path string, dEntry fs.DirEntry, err error) error {
+			if err != nil || dEntry.IsDir() {
+				return nil
+			}
+			index++
+
+			writeFileToPackage(index, path, listName, listFilename, fList, fData)
+			return nil
+		})
 	}
 
 	// close the list
-	fList.WriteString("}\n\n")
+	if fList != nil {
+		fList.WriteString("}\n\n")
+	}
 }
 
 func writeFileToPackage(inFileIndex int, inFileName, listName, listFilename string, fList, fData *os.File) {
@@ -111,14 +138,21 @@ func writeFileToPackage(inFileIndex int, inFileName, listName, listFilename stri
 	}
 	log.Println("file: ", inFileName)
 
-	varname := fmt.Sprintf("%s_%03d", Options.variablePrefix, inFileIndex)
+	varname := ""
+	if len(Options.variable) > 0 {
+		varname = Options.variable
+	} else {
+		varname = fmt.Sprintf("%s_%03d", Options.variablePrefix, inFileIndex)
+	}
 	if Options.exportVariables {
 		varname = strings.Title(varname)
 	}
 	log.Println("varname: ", varname)
 
-	// add the variable to the list
-	fList.WriteString(fmt.Sprintf("%s[\"%s\"] = %s \n", listName, inFileName, varname))
+	// add the variable to the list if not ignored
+	if fList != nil {
+		fList.WriteString(fmt.Sprintf("%s[\"%s\"] = %s \n", listName, inFileName, varname))
+	}
 
 	// open the input file
 	fInData, err := os.OpenFile(origFileName, os.O_RDONLY, 0777)
