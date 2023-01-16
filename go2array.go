@@ -6,6 +6,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -13,10 +14,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 const (
-	GENERATED_BY = "// Auto-generated file, do not edit"
+	GENERATED_BY = "// go2array Auto-generated file, do not edit"
 )
 
 type options struct {
@@ -29,7 +31,18 @@ type options struct {
 	ignoreFilelist  bool
 }
 
-var Options = &options{}
+var (
+	Options = &options{}
+
+	preloadByteSymbols = make(map[byte]string)
+)
+
+func init() {
+	for c := byte(0x00); c < byte(0xFF); c++ {
+		preloadByteSymbols[c] = fmt.Sprintf("0x%02x, ", c)
+	}
+	preloadByteSymbols[0xFF] = fmt.Sprintf("0x%02x, ", 0xFF)
+}
 
 func main() {
 	flag.StringVar(&Options.variable, "var", "", "String for the fixed variable name")
@@ -93,23 +106,24 @@ func main() {
 
 	fData.WriteString(fmt.Sprintf("package %s\n\n", Options.packageName))
 
-	log.Println("list file: ", listFilename, "ignored: ", Options.ignoreFilelist)
-	log.Println("data file: ", dataFilename)
-	index := 0
+	// Serial FS scan
+	log.Println("list file: ", listFilename, "| ignored: ", Options.ignoreFilelist, "| data file: ", dataFilename)
+	harvestPaths := make(map[string][]string)
+	totalFiles := 0
 	for _, inFile := range flag.CommandLine.Args() {
 		f, err := os.Open(inFile)
 		if err != nil {
 			panic(err)
 		}
 		stat, err := f.Stat()
-		f.Close()
+		_ = f.Close()
 		if err != nil {
 			continue
 		}
 
 		if !stat.IsDir() {
-			writeFileToPackage(index, inFile, listName, listFilename, fList, fData)
-			index++
+			harvestPaths[inFile] = []string{} // single file does not have any subresults
+			totalFiles++
 			continue
 		}
 		if stat.IsDir() && len(Options.variable) > 0 {
@@ -118,16 +132,44 @@ func main() {
 		}
 
 		log.Printf("Will harvest the '%s' directory\n", inFile)
-		filepath.WalkDir(inFile, func(path string, dEntry fs.DirEntry, err error) error {
+		harvestPaths[inFile] = make([]string, 0, 32)
+		_ = filepath.WalkDir(inFile, func(path string, dEntry fs.DirEntry, err error) error {
 			if err != nil || dEntry.IsDir() {
 				return nil
 			}
-			index++
-
-			writeFileToPackage(index, path, listName, listFilename, fList, fData)
+			harvestPaths[inFile] = append(harvestPaths[inFile], path)
+			totalFiles++
 			return nil
 		})
 	}
+
+	// Parallel load
+	wg := &sync.WaitGroup{}
+	wg.Add(totalFiles)
+
+	lock := &sync.Mutex{}
+
+	index := 0
+	for root, harvestFiles := range harvestPaths {
+		if len(harvestFiles) == 0 {
+			go func(_index int, _path, _inFile string) {
+				writeFileToPackage(_index, _path, listName, _inFile, fList, fData, lock)
+				wg.Done()
+			}(index, root, "")
+			index++
+			continue
+		}
+
+		for _, harvestFile := range harvestFiles {
+			go func(_index int, _path, _inFile string) {
+				writeFileToPackage(_index, _path, listName, _inFile, fList, fData, lock)
+				wg.Done()
+			}(index, harvestFile, root)
+			index++
+		}
+	}
+
+	wg.Wait()
 
 	// close the list
 	if fList != nil {
@@ -135,12 +177,17 @@ func main() {
 	}
 }
 
-func writeFileToPackage(inFileIndex int, inFileName, listName, listFilename string, fList, fData *os.File) {
+func writeFileToPackage(inFileIndex int, inFileName, listName, baseFilename string, fList, fData *os.File, lock *sync.Mutex) {
 	origFileName := inFileName
+	inFileName = strings.ReplaceAll(inFileName, baseFilename, "")
+	inFileName = strings.ReplaceAll(inFileName, `\`, "/")
+	inFileName = filepath.ToSlash(inFileName)
+	if inFileName[0] == '/' {
+		inFileName = inFileName[1:]
+	}
 	if Options.flatHierarchy {
 		inFileName = filepath.Base(inFileName)
 	}
-	log.Println("file: ", inFileName)
 
 	varname := ""
 	if len(Options.variable) > 0 {
@@ -151,11 +198,13 @@ func writeFileToPackage(inFileIndex int, inFileName, listName, listFilename stri
 	if Options.exportVariables {
 		varname = strings.Title(varname)
 	}
-	log.Println("varname: ", varname)
+	log.Println("file: ", inFileName, "| base: ", baseFilename, "| varname: ", varname)
 
 	// add the variable to the list if not ignored
 	if fList != nil {
-		fList.WriteString(fmt.Sprintf("%s[\"%s\"] = %s \n", listName, inFileName, varname))
+		lock.Lock()
+		_, _ = fList.WriteString(fmt.Sprintf("\t%s[\"%s\"] = %s \n", listName, inFileName, varname))
+		lock.Unlock()
 	}
 
 	// open the input file
@@ -165,23 +214,34 @@ func writeFileToPackage(inFileIndex int, inFileName, listName, listFilename stri
 	}
 	defer fInData.Close()
 
-	// Read the bytes and convert the file
-	br := bufio.NewReader(fInData)
+	//_, _ = fInData.Seek(0, syscall.FILE_BEGIN)
+	// fInData.Read()
 
-	fData.WriteString(fmt.Sprintf("// original file: %s\n", origFileName))
-	fData.WriteString(fmt.Sprintf("var %s []byte = []byte{", varname))
+	// Read the bytes and convert the file
+	reader := bufio.NewReader(fInData)
+
+	buffer := bytes.NewBufferString("")
+
+	buffer.WriteString(fmt.Sprintf("// original file: %s\n", origFileName))
+	buffer.WriteString(fmt.Sprintf("var %s []byte = []byte{", varname))
 
 	count := 0
-	for buf, err := br.ReadByte(); err == nil; buf, err = br.ReadByte() {
-		if count%12 == 0 {
-			fData.WriteString("\n\t")
+	for char, err := reader.ReadByte(); err == nil; char, err = reader.ReadByte() {
+		if count%16 == 0 {
+			buffer.WriteString("\n\t")
 		}
-		fData.WriteString(fmt.Sprintf("0x%02x, ", buf))
+		buffer.WriteString(preloadByteSymbols[char])
 		count++
 	}
 
 	// close the variable
-	fData.WriteString("\n}\n\n")
+	buffer.WriteString("\n}\n\n")
+
+	// flush to the output file
+	lock.Lock()
+	defer lock.Unlock()
+	_, _ = fData.WriteString(buffer.String())
+	_ = fData.Sync()
 }
 
 func getSuffix(base, suffix string) string {
