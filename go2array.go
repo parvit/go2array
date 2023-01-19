@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -29,6 +30,7 @@ type options struct {
 	exportVariables bool
 	flatHierarchy   bool
 	ignoreFilelist  bool
+	asyncOutput     bool
 }
 
 var (
@@ -52,6 +54,7 @@ func main() {
 	flag.BoolVar(&Options.exportVariables, "export", false, "Exports also variables")
 	flag.BoolVar(&Options.flatHierarchy, "flat", false, "Flatten hierarchy")
 	flag.BoolVar(&Options.ignoreFilelist, "nolist", false, "Don't produce list file")
+	flag.BoolVar(&Options.asyncOutput, "async", false, "Disable output to data file to be serialized")
 
 	flag.Parse()
 	if !flag.Parsed() {
@@ -150,11 +153,33 @@ func main() {
 	lock := &sync.Mutex{}
 
 	index := 0
+	current := 0
 	for root, harvestFiles := range harvestPaths {
 		if len(harvestFiles) == 0 {
 			go func(_index int, _path, _inFile string) {
-				writeFileToPackage(_index, _path, listName, _inFile, fList, fData, lock)
-				wg.Done()
+				// read asynchronously the hex buffer
+				buffer, filename, varname := readFileToPackage(_index, _path, _inFile)
+
+				// flush to the output file
+				if !Options.asyncOutput {
+					for current != _index {
+						time.Sleep(1 * time.Millisecond)
+					}
+				}
+				log.Printf("output | %v | %v | %v\n", current, filename, varname)
+				lock.Lock()
+				defer func() {
+					lock.Unlock()
+					wg.Done()
+				}()
+				// add the variable to the list if not ignored
+				if fList != nil {
+					_, _ = fList.WriteString(fmt.Sprintf("\t%s[\"%s\"] = %s \n", listName, filename, varname))
+				}
+				_, _ = fData.WriteString(buffer.String())
+				_ = fData.Sync()
+				current = _index + 1
+
 			}(index, root, "")
 			index++
 			continue
@@ -162,8 +187,29 @@ func main() {
 
 		for _, harvestFile := range harvestFiles {
 			go func(_index int, _path, _inFile string) {
-				writeFileToPackage(_index, _path, listName, _inFile, fList, fData, lock)
-				wg.Done()
+				// read asynchronously the hex buffer
+				buffer, filename, varname := readFileToPackage(_index, _path, _inFile)
+
+				// flush to the output file
+				if !Options.asyncOutput {
+					for current != _index {
+						time.Sleep(1 * time.Millisecond)
+					}
+				}
+				log.Printf("output | %v | %v | %v\n", current, filename, varname)
+				lock.Lock()
+				defer func() {
+					lock.Unlock()
+					wg.Done()
+				}()
+				// add the variable to the list if not ignored
+				if fList != nil {
+					_, _ = fList.WriteString(fmt.Sprintf("\t%s[\"%s\"] = %s \n", listName, filename, varname))
+				}
+				_, _ = fData.WriteString(buffer.String())
+				_ = fData.Sync()
+				current = _index + 1
+
 			}(index, harvestFile, root)
 			index++
 		}
@@ -177,7 +223,8 @@ func main() {
 	}
 }
 
-func writeFileToPackage(inFileIndex int, inFileName, listName, baseFilename string, fList, fData *os.File, lock *sync.Mutex) {
+func readFileToPackage(inFileIndex int, inFileName, baseFilename string) (*bytes.Buffer, string, string) {
+
 	origFileName := inFileName
 	inFileName = strings.ReplaceAll(inFileName, baseFilename, "")
 	inFileName = strings.ReplaceAll(inFileName, `\`, "/")
@@ -199,13 +246,6 @@ func writeFileToPackage(inFileIndex int, inFileName, listName, baseFilename stri
 		varname = strings.Title(varname)
 	}
 	log.Println("file: ", inFileName, "| base: ", baseFilename, "| varname: ", varname)
-
-	// add the variable to the list if not ignored
-	if fList != nil {
-		lock.Lock()
-		_, _ = fList.WriteString(fmt.Sprintf("\t%s[\"%s\"] = %s \n", listName, inFileName, varname))
-		lock.Unlock()
-	}
 
 	// open the input file
 	fInData, err := os.OpenFile(origFileName, os.O_RDONLY, 0777)
@@ -237,11 +277,7 @@ func writeFileToPackage(inFileIndex int, inFileName, listName, baseFilename stri
 	// close the variable
 	buffer.WriteString("\n}\n\n")
 
-	// flush to the output file
-	lock.Lock()
-	defer lock.Unlock()
-	_, _ = fData.WriteString(buffer.String())
-	_ = fData.Sync()
+	return buffer, inFileName, varname
 }
 
 func getSuffix(base, suffix string) string {
