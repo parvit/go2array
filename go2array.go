@@ -88,7 +88,7 @@ func main() {
 	var fList *os.File
 	var err error
 	if !Options.ignoreFilelist {
-		fList, err = os.OpenFile(listFilename, os.O_CREATE|os.O_TRUNC, 0777)
+		fList, err = os.Create(listFilename)
 		if err != nil {
 			log.Fatalf("Could not create file %s", listFilename)
 		}
@@ -101,7 +101,7 @@ func main() {
 	}
 
 	// data file create
-	fData, err := os.OpenFile(dataFilename, os.O_CREATE|os.O_TRUNC, 0777)
+	fData, err := os.Create(dataFilename)
 	if err != nil {
 		log.Fatalf("Could not create file %s", dataFilename)
 	}
